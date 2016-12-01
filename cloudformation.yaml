@@ -1,0 +1,172 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+
+Parameters:
+  FunctionName:
+    Type: String
+
+  CodeS3Bucket:
+    Type: String
+
+  CodeS3Key:
+    Type: String
+
+  MemorySize:
+    Type: Number
+
+  ImageS3Bucket:
+    Type: String
+
+  ResizeStrategy:
+    Type: String
+
+  JPEGCompression:
+    Type: String
+
+  PNGCompression:
+    Type: String
+
+
+Resources:
+  LambdaExecutionRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement: 
+          - Effect: Allow
+            Principal:
+              Service: ["lambda.amazonaws.com", "apigateway.amazonaws.com"]
+            Action: ["sts:AssumeRole"]
+      Path: "/"
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ["logs:*"]
+                Resource: "arn:aws:logs:*:*:*"
+              - Effect: Allow
+                Action: ["s3:GetObject"]
+                Resource: !Join ["", ["arn:aws:s3:::", !Ref ImageS3Bucket, "*"]]
+              - Effect: Allow
+                Action: ["*"]
+                Resource: ["*"]
+
+  Lambda:
+    Type: "AWS::Lambda::Function"
+    Properties: 
+      Code:
+        S3Bucket: !Ref CodeS3Bucket
+        S3Key: !Ref CodeS3Key
+      Environment:
+        Variables:
+          S3_BUCKET:        !Ref ImageS3Bucket
+          RESIZE_STRATEGY:  !Ref ResizeStrategy
+          JPEG_COMPRESSION: !Ref JPEGCompression
+          PNG_COMPRESSION:  !Ref PNGCompression
+      FunctionName: !Ref FunctionName
+      Handler: "index.handler"
+      MemorySize: !Ref MemorySize
+      Role: !GetAtt [LambdaExecutionRole, "Arn"]
+      Runtime: "nodejs4.3"
+      Timeout: 30
+      VpcConfig:
+        SubnetIds:
+          - subnet-24e07b7c
+          - subnet-24e07b7c
+          - subnet-a59990c1
+        SecurityGroupIds:
+          - sg-6335a51a
+
+  LambdaPermissions:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      Action: "lambda:invokeFunction"
+      FunctionName: !GetAtt [Lambda, "Arn"]
+      Principal:    "apigateway.amazonaws.com"
+      SourceArn:
+        Fn::Join:
+          - ""
+          - - "arn:aws:execute-api:"
+            - !Ref "AWS::Region"
+            - ":"
+            - !Ref "AWS::AccountId"
+            - ":"
+            - !Ref RestApi
+            - "/*"
+
+  RestApi:
+    Type: "AWS::ApiGateway::RestApi"
+    Properties:
+      Name: "Image Resizer"
+      Body:
+        swagger: '2.0'
+        info:
+          version: '2016-10-21T17:26:28Z'
+          title: ImageResizer
+        basePath: "/v1"
+        schemes:
+        - https
+        paths:
+          "/image/{key}":
+            get:
+              produces:
+              - application/json
+              parameters:
+              - name: key
+                in: path
+                required: true
+                type: string
+              - name: width
+                in: query
+                required: false
+                type: string
+              - name: height
+                in: query
+                required: false
+                type: string
+              - name: format
+                in: query
+                required: false
+                type: string
+              responses:
+                '200':
+                  description: 200 response
+                  schema:
+                    "$ref": "#/definitions/Empty"
+                '500':
+                  description: 500 response
+              x-amazon-apigateway-integration:
+                uri:
+                  Fn::Sub:
+                   - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ARN}/invocations"
+                   - ARN: !GetAtt [Lambda, "Arn"]
+                type: AWS
+                # credentials: !GetAtt [LambdaExecutionRole, "Arn"]
+                passthroughBehavior: "never"
+                contentHandling: "CONVERT_TO_TEXT"
+                httpMethod: POST
+                requestTemplates:
+                  application/json: |-
+                    {
+                       "key": "$input.params('key')",
+                       "maxWidth": "$input.params('width')",
+                       "maxHeight": "$input.params('height')",
+                       "format": "$input.params('format')"
+                    }
+                responses:
+                  5\\d{2}:
+                    statusCode: '500'
+                  default:
+                    statusCode: '200'
+                    responseTemplates:
+                      image/jpeg: ""
+        x-amazon-apigateway-binary-media-types:
+        - application/octet-stream
+        - image/jpeg
+        definitions:
+          Empty:
+            type: object
+            title: Empty Schema
